@@ -1,0 +1,201 @@
+openapi: 3.0.3
+info:
+  title: Certivoo Certificate Issuance API
+  description: >
+    Issue tamper-evident, verifiable certificates programmatically. Certivoo
+    stamps a verifiable cover page onto your certificate PDF, records it, and
+    emails the finished certificate to the issuer and holder. Verification
+    always happens through Certivoo (see `/certificates/verify` in the web
+    application) so that revoked certificates are never mistakenly treated
+    as valid — this API deliberately does not return a file hash or the
+    certificate file itself.
+  version: "1.0.0"
+  contact:
+    name: Certivoo Support
+servers:
+  - url: https://certivoo.ae/api/v1
+    description: UAE deployment (separate accounts, database, and API keys from Pakistan)
+  - url: https://certivoo.pk/api/v1
+    description: Pakistan deployment (separate accounts, database, and API keys from UAE)
+
+security:
+  - ApiKeyAuth: []
+
+tags:
+  - name: Certificates
+    description: Issue verifiable certificates
+
+paths:
+  /certificates/issue:
+    post:
+      tags: [Certificates]
+      summary: Issue a verifiable certificate
+      description: >
+        Stamps a verifiable cover page onto the supplied certificate PDF,
+        records the certificate, and emails the finished PDF to the issuer
+        and holder. Subject to the account's daily issuance limit.
+      operationId: issueCertificate
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/IssueCertificateRequest'
+            encoding:
+              pdf_upload:
+                contentType: application/pdf
+      responses:
+        '201':
+          description: Certificate issued successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IssueCertificateResponse'
+              example:
+                reference: "5-20260717-1"
+                issued_at: "2026-07-17T09:12:00Z"
+                status: issued
+        '400':
+          description: Malformed request — a required field is missing
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: bad_request
+                field: holder_email
+                message: This field is required.
+        '401':
+          description: Missing, invalid, or revoked API key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: unauthorized
+                field: null
+                message: Invalid or revoked API key.
+        '422':
+          description: A field failed validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: validation_error
+                field: pdf_upload
+                message: File size must be 1.0 MB or less.
+        '429':
+          description: Daily issuance limit reached for this account
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: rate_limited
+                field: null
+                message: Daily certificate limit reached. Try again tomorrow.
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: "vega_live_{token}"
+      description: >
+        API key generated from the Certivoo account under Settings → API
+        Keys. Keys are deployment-specific — a key issued on certivoo.ae
+        will not authenticate against certivoo.pk, and vice versa.
+
+  schemas:
+    IssueCertificateRequest:
+      type: object
+      required:
+        - title
+        - holder_name
+        - holder_email
+        - holder_identification
+        - pdf_upload
+      properties:
+        title:
+          type: string
+          description: Certificate title, shown on the verifiable cover page.
+          minLength: 10
+          maxLength: 60
+          pattern: "^[a-zA-Z0-9\\s'\\-.@#]+$"
+          example: "Certificate of Completion - Data Science"
+        holder_name:
+          type: string
+          description: Full name of the person receiving the certificate.
+          minLength: 10
+          maxLength: 60
+          pattern: "^[a-zA-Z0-9\\s'\\-.]+$"
+          example: "Jane Doe"
+        holder_email:
+          type: string
+          format: email
+          description: Holder's email address. The finished certificate is emailed here.
+          maxLength: 60
+          example: "jane@example.com"
+        holder_identification:
+          type: string
+          description: Student/employee ID, passport number, or similar reference for the holder.
+          minLength: 5
+          maxLength: 100
+          pattern: "^[a-zA-Z0-9\\s'\\-./]+$"
+          example: "STUDENT-4471"
+        pdf_upload:
+          type: string
+          format: binary
+          description: >
+            The certificate PDF to be stamped, before Certivoo's verifiable
+            cover page is added. Must not be encrypted. Maximum size is
+            account-specific (1 MB on the Free plan).
+          maxLength: 1048576
+
+    IssueCertificateResponse:
+      type: object
+      required:
+        - reference
+        - issued_at
+        - status
+      properties:
+        reference:
+          type: string
+          description: >
+            Permanent identifier for this certificate, in the form
+            `{issuer_id}-{YYYYMMDD}-{serial}`. Use this to verify or revoke
+            the certificate later.
+          pattern: "^\\d+-\\d{8}-\\d+$"
+          example: "5-20260717-1"
+        issued_at:
+          type: string
+          format: date-time
+          description: UTC timestamp the certificate was issued.
+          example: "2026-07-17T09:12:00Z"
+        status:
+          type: string
+          enum: [issued]
+          example: issued
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+        - message
+      properties:
+        error:
+          type: string
+          description: Machine-readable error code.
+          enum:
+            - bad_request
+            - unauthorized
+            - validation_error
+            - rate_limited
+        field:
+          type: string
+          nullable: true
+          description: The request field the error relates to, if applicable.
+        message:
+          type: string
+          description: Human-readable description of the error.
